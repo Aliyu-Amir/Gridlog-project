@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GridLog</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 950px;
+      margin: 30px auto;
+      padding: 0 15px;
+    }
+
+    .card {
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      padding: 16px;
+      margin: 15px 0;
+    }
+
+    input,
+    select,
+    button {
+      padding: 10px;
+      margin: 6px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    button {
+      width: auto;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+
+    #message {
+      background: #f1f1f1;
+      border: 1px solid #ddd;
+      padding: 10px;
+      min-height: 24px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      margin-bottom: 15px;
+    }
+
+    pre {
+      background: #fafafa;
+      border: 1px solid #ddd;
+      padding: 10px;
+      overflow: auto;
+      max-height: 350px;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    label {
+      font-weight: bold;
+      display: block;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>GridLog</h1>
+
+  <div id="message">Waiting...</div>
+
+  <!-- LOGIN SECTION -->
+  <div id="loginCard" class="card">
+    <h2>Login</h2>
+
+    <label>Email</label>
+    <input id="email" type="email" placeholder="operator.kainji@example.com" />
+
+    <label>Password</label>
+    <input id="password" type="password" placeholder="Your password" />
+
+    <button onclick="login()">Login</button>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <!-- APP SECTION -->
+  <div id="app" class="hidden">
+
+    <div class="card">
+      <h2>Profile</h2>
+      <pre id="profileInfo"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Outage Form</h2>
+
+      <label>Station</label>
+      <select id="stationSelect" onchange="onStationChange()"></select>
+
+      <label>Generator Unit</label>
+      <select id="generatorSelect"></select>
+
+      <label>Outage Class</label>
+      <select id="outageClass">
+        <option value="FORCED_GENERATION">Forced Outage - Generation</option>
+        <option value="PLANNED_GENERATION">Planned Outage - Generation</option>
+        <option value="URGENT_GENERATION">Urgent Outage - Generation</option>
+        <option value="EMERGENCY">Emergency Outage</option>
+      </select>
+
+      <label>Start Time</label>
+      <input id="startTime" type="datetime-local" />
+
+      <label>End Time</label>
+      <input id="endTime" type="datetime-local" />
+
+      <label>Load Loss MW</label>
+      <input id="loadLoss" type="number" step="0.01" min="0" placeholder="Example: 106.5" />
+
+      <label>Cause Details</label>
+      <input id="causeDetails" type="text" placeholder="Example: tripped due to earth fault" />
+
+      <label>Remarks</label>
+      <input id="remarks" type="text" placeholder="Optional remarks" />
+
+      <button onclick="saveOutage()">Save Outage</button>
+      <button onclick="submitForm()">Submit Form</button>
+    </div>
+
+    <div class="card">
+      <h2>Saved Outages</h2>
+      <button onclick="loadOutages()">Refresh Outages</button>
+      <pre id="outageList"></pre>
+    </div>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <script>
+    const SUPABASE_URL = 'https://etlqbjcngjdyixmbxmvr.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV0bHFiamNuZ2pkeWl4bWJ4bXZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4OTY1MzksImV4cCI6MjEwNDQ3MjUzOX0.mpKOR8aqHdvQEWnOd001sOeucWtXhAHLY8kO3Cflv1A';
+
+    const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let currentUser = null;
+    let currentProfile = null;
+
+    function setMessage(text) {
+      document.getElementById('message').textContent = text;
+    }
+
+    async function login() {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      if (!email || !password) {
+        setMessage('Enter email and password.');
+        return;
+      }
+
+      const { error } = await db.auth.signInWithPassword({
+        email: email,
+        password: password
+      });
+
+      if (error) {
+        setMessage('Login failed: ' + error.message);
+        return;
+      }
+
+      setMessage('Login successful. Loading profile...');
+      await initApp();
+    }
+
+    async function logout() {
+      await db.auth.signOut();
+      window.location.reload();
+    }
+
+    async function initApp() {
+      const { data } = await db.auth.getUser();
+      currentUser = data.user;
+
+      if (!currentUser) {
+        setMessage('No logged-in user found.');
+        return;
+      }
+
+      const { data: profile, error } = await db
+        .from('profiles')
+        .select('*')
+        .eq('id', currentUser.id)
+        .maybeSingle();
+
+      if (error) {
+        setMessage('Profile error: ' + error.message);
+        return;
+      }
+
+      if (!profile) {
+        setMessage('No profile found. Create a profile row for this user.');
+        return;
+      }
+
+      currentProfile = profile;
+
+      document.getElementById('app').classList.remove('hidden');
+      document.getElementById('profileInfo').textContent = JSON.stringify(profile, null, 2);
+
+      await loadStations();
+      await loadOutages();
+    }
+
+    async function loadStations() {
+      const { data, error } = await db
+        .from('stations')
+        .select('*')
+        .eq('is_active', true)
+        .order('station_name');
+
+      if (error) {
+        setMessage('Stations error: ' + error.message);
+        return;
+      }
+
+      const select = document.getElementById('stationSelect');
+      select.innerHTML = '<option value="">Select station</option>';
+
+      data.forEach(station => {
+        const option = document.createElement('option');
+        option.value = station.id;
+        option.textContent = station.station_name;
+        select.appendChild(option);
+      });
+
+      if (currentProfile && currentProfile.station_id) {
+        select.value = currentProfile.station_id;
+        await onStationChange();
+      }
+    }
+
+    async function onStationChange() {
+      const stationId = document.getElementById('stationSelect').value;
+
+      const generatorSelect = document.getElementById('generatorSelect');
+      generatorSelect.innerHTML = '<option value="">Select generator unit</option>';
+
+      if (!stationId) {
+        return;
+      }
+
+      const { data, error } = await db
+        .from('generator_units')
+        .select('*')
+        .eq('station_id', stationId)
+        .eq('is_active', true)
+        .order('unit_name');
+
+      if (error) {
+        setMessage('Generator units error: ' + error.message);
+        return;
+      }
+
+      data.forEach(unit => {
+        const option = document.createElement('option');
+        option.value = unit.id;
+        option.textContent = unit.unit_name + ' | ' + unit.primary_energy + ' | ' + unit.capacity_mw + ' MW';
+        generatorSelect.appendChild(option);
+      });
+    }
+
+    async function getOrCreateFormRecord(stationId) {
+      const today = new Date().toISOString().slice(0, 10);
+
+      const payload = {
+        report_date: today,
+        station_id: Number(stationId),
+        form_code: 'OUTAGE',
+        status: 'DRAFT',
+        current_stage: 'OPERATOR'
+      };
+
+      const { data, error } = await db
+        .from('daily_form_records')
+        .upsert(payload, {
+          onConflict: 'report_date,station_id,form_code'
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      return data;
+    }
+
+    async function saveOutage() {
+      try {
+        const stationId = document.getElementById('stationSelect').value;
+        const generatorId = document.getElementById('generatorSelect').value;
+        const outageClass = document.getElementById('outageClass').value;
+        const startTime = document.getElementById('startTime').value;
+        const endTime = document.getElementById('endTime').value;
+        const loadLoss = document.getElementById('loadLoss').value;
+        const causeDetails = document.getElementById('causeDetails').value;
+        const remarks = document.getElementById('remarks').value;
+
+        if (!stationId) {
+          setMessage('Select a station.');
+          return;
+        }
+
+        if (!generatorId) {
+          setMessage('Select a generator unit.');
+          return;
+        }
+
+        if (!startTime || !endTime) {
+          setMessage('Enter start time and end time.');
+          return;
+        }
+
+        const formRecord = await getOrCreateFormRecord(stationId);
+
+        if (formRecord.status !== 'DRAFT' && formRecord.status !== 'RETURNED') {
+          setMessage('This form is already ' + formRecord.status + '. You cannot add more outage events.');
+          return;
+        }
+
+        const { error } = await db
+          .from('outage_events')
+          .insert({
+            daily_form_record_id: formRecord.id,
+            station_id: Number(stationId),
+            outage_class: outageClass,
+            equipment_type: 'GENERATOR_UNIT',
+            generator_unit_id: Number(generatorId),
+            event_start_time: new Date(startTime).toISOString(),
+            event_end_time: new Date(endTime).toISOString(),
+            load_loss_mw: loadLoss ? Number(loadLoss) : null,
+            cause_details: causeDetails || null,
+            remarks: remarks || null
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        setMessage('Outage event saved.');
+        await loadOutages();
+
+      } catch (error) {
+        setMessage('Save outage error: ' + error.message);
+      }
+    }
+
+    async function submitForm() {
+      try {
+        const stationId = document.getElementById('stationSelect').value;
+
+        if (!stationId) {
+          setMessage('Select a station before submitting.');
+          return;
+        }
+
+        const formRecord = await getOrCreateFormRecord(stationId);
+
+        if (formRecord.status === 'SUBMITTED') {
+          setMessage('This form has already been submitted.');
+          return;
+        }
+
+        const { error } = await db
+          .from('daily_form_records')
+          .update({
+            status: 'SUBMITTED',
+            current_stage: 'ACC',
+            submitted_at: new Date().toISOString(),
+            submitted_by: currentUser.id
+          })
+          .eq('id', formRecord.id);
+
+        if (error) {
+          throw error;
+        }
+
+        setMessage('Outage form submitted to ACC stage.');
+        await loadOutages();
+
+      } catch (error) {
+        setMessage('Submit form error: ' + error.message);
+      }
+    }
+
+    async function loadOutages() {
+      try {
+        const stationId = document.getElementById('stationSelect').value;
+
+        if (!stationId) {
+          document.getElementById('outageList').textContent = '';
+          return;
+        }
+
+        const { data, error } = await db
+          .from('outage_events')
+          .select('*, generator_units(unit_name)')
+          .eq('station_id', stationId)
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (error) {
+          throw error;
+        }
+
+        document.getElementById('outageList').textContent = JSON.stringify(data, null, 2);
+
+      } catch (error) {
+        setMessage('Load outages error: ' + error.message);
+      }
+    }
+
+    window.onload = async () => {
+      const { data } = await db.auth.getSession();
+
+      if (data.session) {
+        await initApp();
+      } else {
+        setMessage('Please login.');
+      }
+    };
+  </script>
+
+</body>
+</html>
